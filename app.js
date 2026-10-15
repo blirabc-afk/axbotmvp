@@ -30,7 +30,7 @@ $('pickInput').addEventListener('change', e => {
 });
 
 /* ---------- 2. 진도: 여섯 조각 ---------- */
-const STEPS = ['자료 읽기', '빈 자료·중복 검사', '내용 나누기', '한눈에 정리', '믿:음 불러오기', '준비 완료'];
+const STEPS = ['자료 읽기', '빈 자료·중복 검사', '내용 나누기', '한눈에 정리', '내장된 AI 불러오는 중입니다', '준비 완료'];
 const COLORS = ['#1A237E', '#7B1F2A', '#00695C', '#E65100', '#4A148C', '#1B5E20'];
 function pie(done) {
   const svg = $('pie'); let h = '';
@@ -144,10 +144,10 @@ $('go').addEventListener('click', async () => {
   await pause(); step(3);
 
   buildOverview({ dup, empty, fail });
-  await pause(); step(4, '처음 한 번만 받습니다');
+  await pause(); step(4, 'AX봇이 작업할 폴더를 준비 중입니다');
   await modelPromise;
   if (modelErr) {
-    $('stepName').textContent = '믿:음을 받지 못했습니다';
+    $('stepName').textContent = '내장된 AI를 불러오지 못했습니다';
     $('stepNote').textContent = '인터넷 연결을 확인하고 새로 고침해 주세요';
     return;
   }
@@ -181,22 +181,26 @@ function buildOverview({ dup, empty, fail }) {
 function firstLine(t) { const s = t.trim().split('\n').find(x => x.trim()) || ''; return s.trim().slice(0, 60); }
 
 /* ---------- 믿:음 불러오기 ---------- */
-let modelPromise = null;
+let modelPromise = null, onCpu = false;
+const progressCallback = ({ loaded, total }) => {
+  if ($('s2').classList.contains('on') && total)
+    $('stepNote').textContent = `AX봇이 작업할 폴더를 준비 중입니다 · ${Math.round(loaded / 1048576).toLocaleString()}MB / ${Math.round(total / 1048576).toLocaleString()}MB`;
+};
+async function loadCpu() {
+  try { await wllama.exit(); } catch {}
+  wllama = new Wllama({ default: './wllama.wasm' });
+  await wllama.loadModelFromHF(MODEL, { n_ctx: N_CTX, n_gpu_layers: 0, progressCallback });
+  onCpu = true;
+}
 function loadModel() {
   if (modelPromise) return modelPromise;
   wllama = new Wllama({ default: './wllama.wasm' }, { parallelDownloads: 3 });
-  const progressCallback = ({ loaded, total }) => {
-    if ($('s2').classList.contains('on') && total)
-      $('stepNote').textContent = `처음 한 번만 받습니다 · ${Math.round(loaded / 1048576).toLocaleString()}MB / ${Math.round(total / 1048576).toLocaleString()}MB`;
-  };
   modelPromise = (async () => {
     try {
       await wllama.loadModelFromHF(MODEL, { n_ctx: N_CTX, progressCallback });
     } catch (e1) {
-      // 그래픽 장치로 못 돌리면 CPU로 다시 불러온다
-      try { await wllama.exit(); } catch {}
-      wllama = new Wllama({ default: './wllama.wasm' });
-      await wllama.loadModelFromHF(MODEL, { n_ctx: N_CTX, n_gpu_layers: 0, progressCallback });
+      console.warn('그래픽 장치로 불러오기 실패, CPU로 다시 불러온다', e1);
+      await loadCpu();
     }
     modelReady = true;
   })().catch(e => { modelErr = e; console.error(e); });
@@ -219,14 +223,14 @@ const SYSTEM = `너는 AX봇이다. 아래 [자료]에 적힌 내용만으로 �
 function bigrams(s) { const t = s.replace(/\s+/g, ''); const g = new Set(); for (let i = 0; i < t.length - 1; i++) g.add(t.slice(i, i + 2)); return g; }
 const WIDE = /정리|보고서|전체|요약|모두|전부|한눈|무엇|뭐가|중요/;
 
-function pickContext(q) {
+function pickContext(q, limit = CTX_CHARS) {
   const qg = bigrams(q);
   const scored = chunks.map((c, i) => {
     const cg = bigrams(c.text); let s = 0; qg.forEach(g => { if (cg.has(g)) s++; });
     return { i, s };
   }).sort((a, b) => b.s - a.s);
   const out = [], used = new Set(); let len = 0;
-  const add = (i) => { if (used.has(i)) return; const t = `[${chunks[i].path}]\n${chunks[i].text}`; if (len + t.length > CTX_CHARS) return; used.add(i); out.push(t); len += t.length; };
+  const add = (i) => { if (used.has(i)) return; const t = `[${chunks[i].path}]\n${chunks[i].text}`; if (len + t.length > limit) return; used.add(i); out.push(t); len += t.length; };
   // 넓은 요청이면 자료마다 앞 조각을 먼저 고르게 넣는다
   if (WIDE.test(q) || scored[0]?.s === 0) {
     const firsts = new Map(); chunks.forEach((c, i) => { if (!firsts.has(c.path)) firsts.set(c.path, i); });
@@ -239,7 +243,7 @@ function pickContext(q) {
 async function ask() {
   const q = $('ask').value.trim();
   if (!q) return;
-  if (!modelReady) { $('modelState').textContent = modelErr ? '믿:음을 불러오지 못했습니다' : '믿:음을 아직 받는 중입니다'; return; }
+  if (!modelReady) { $('modelState').textContent = modelErr ? '내장된 AI를 불러오지 못했습니다' : '내장된 AI를 불러오는 중입니다'; return; }
   $('send').disabled = true; $('modelState').textContent = '작성 중';
   const turn = document.createElement('div'); turn.className = 'turn';
   turn.innerHTML = `<div class="q"></div><div class="a"></div>`;
@@ -247,20 +251,34 @@ async function ask() {
   $('talk').prepend(turn);
   const aEl = turn.querySelector('.a');
 
-  const messages = [
+  const build = (k) => [
     { role: 'system', content: SYSTEM },
-    { role: 'user', content: `[계산값]\n${overviewText.slice(0, 1800)}\n\n[자료]\n${pickContext(q)}` },
+    { role: 'user', content: `[계산값]\n${overviewText.slice(0, Math.round(1800 * k))}\n\n[자료]\n${pickContext(q, CTX_CHARS * k)}` },
     { role: 'assistant', content: '자료를 읽었다. 요청을 말해 주면 자료 안에서만 답한다.' },
   ];
-  history.slice(-2).forEach(h => messages.push({ role: 'user', content: h.q }, { role: 'assistant', content: h.a.slice(0, 600) }));
-  messages.push({ role: 'user', content: q });
+  const withTurn = (k) => {
+    const m = build(k);
+    history.slice(-2).forEach(h => m.push({ role: 'user', content: h.q }, { role: 'assistant', content: h.a.slice(0, 600) }));
+    m.push({ role: 'user', content: q });
+    return m;
+  };
 
-  let a = '';
-  try {
-    const stream = await wllama.createChatCompletion({ messages, max_tokens: 1024, temperature: 0.2, top_p: 0.9, stream: true });
+  let a = '', lastErr = null;
+  const run = async (k) => {
+    a = '';
+    const stream = await wllama.createChatCompletion({ messages: withTurn(k), max_tokens: 1024, temperature: 0.2, top_p: 0.9, stream: true });
     for await (const ch of stream) { a += ch.choices?.[0]?.delta?.content ?? ''; aEl.textContent = a; }
-  } catch (e) {
-    console.error(e); a = a || '결과를 만들지 못했습니다. 요청을 짧게 줄여 다시 해 주세요.'; aEl.textContent = a;
+    if (!a.trim()) throw new Error('빈 답변');
+  };
+  // 1차: 그대로 → 2차: CPU로 바꿔서 → 3차: 자료를 절반으로 줄여서
+  const tries = [async () => run(1), async () => { if (!onCpu) { $('modelState').textContent = '다시 작성 중'; await loadCpu(); } return run(1); }, async () => run(0.5)];
+  let ok = false;
+  for (const t of tries) {
+    try { await t(); ok = true; break; } catch (e) { lastErr = e; console.error(e); }
+  }
+  if (!ok) {
+    a = '결과를 만들지 못했습니다.';
+    aEl.textContent = a + '\n원인: ' + (lastErr?.message || String(lastErr));
   }
   history.push({ q, a });
   $('ask').value = ''; $('send').disabled = false; $('modelState').textContent = '';
@@ -277,6 +295,10 @@ $('save').addEventListener('click', () => {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿' + html], { type: 'application/msword' }));
   a.download = `AXbot_result_${ymd}.doc`; a.click();
+});
+$('again').addEventListener('click', () => {
+  $('ask').value = ''; $('ask').focus();
+  $('ask').scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
 $('home').addEventListener('click', () => {
   picked = []; docs = []; chunks = []; history = [];
