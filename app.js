@@ -42,7 +42,8 @@ function pie(done) {
   }
   svg.innerHTML = h;
 }
-function step(i, note = '') { pie(i); $('stepName').textContent = STEPS[Math.min(i, 5)]; $('stepNote').textContent = note; }
+let curStep = 0;
+function step(i, note = '') { curStep = i; pie(i); $('stepName').textContent = STEPS[Math.min(i, 5)]; $('stepNote').textContent = note; }
 
 /* ---------- 자료 읽기 ---------- */
 const ext = (p) => (p.split('.').pop() || '').toLowerCase();
@@ -56,8 +57,8 @@ async function readOne({ path, file }) {
     }
     if (['csv', 'tsv', 'xlsx', 'xls'].includes(e)) {
       const wb = e === 'csv' || e === 'tsv'
-        ? XLSX.read(await file.text(), { type: 'string', FS: e === 'tsv' ? '\t' : ',' })
-        : XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
+        ? XLSX.read(await file.text(), { type: 'string', FS: e === 'tsv' ? '\t' : ',', sheetRows: 3000 })
+        : XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true, sheetRows: 3000 });
       let text = '', facts = [];
       for (const name of wb.SheetNames) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '' });
@@ -75,7 +76,7 @@ async function readOne({ path, file }) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
       const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
       let t = '';
-      for (let i = 1; i <= Math.min(pdf.numPages, 60); i++) {
+      for (let i = 1; i <= Math.min(pdf.numPages, 30); i++) {
         const c = await (await pdf.getPage(i)).getTextContent();
         t += c.items.map(x => x.str).join(' ') + '\n';
       }
@@ -123,7 +124,12 @@ $('go').addEventListener('click', async () => {
   loadModel();                         // 모델은 자료 정리와 함께 받는다
   step(0, `자료 ${picked.length}개`);
   docs = [];
-  for (const p of picked) docs.push(await readOne(p));
+  for (let i = 0; i < picked.length; i++) {
+    const p = picked[i];
+    $('stepNote').textContent = `${i + 1} / ${picked.length} · ${p.path.split('/').pop()}`;
+    if (p.file.size > MAX_BYTES) { docs.push({ path: p.path, kind: '읽지 못함', text: '', big: true }); continue; }
+    docs.push(await withTimeout(readOne(p), 20000, { path: p.path, kind: '읽지 못함', text: '' }));
+  }
   step(1);
 
   const seen = new Map(); const dup = [], empty = [], fail = [];
@@ -131,7 +137,7 @@ $('go').addEventListener('click', async () => {
     const d = docs[i];
     if (d.kind === '읽지 못함') { fail.push(d.path); continue; }
     if (!d.text.trim()) { empty.push(d.path); d.skip = true; continue; }
-    const h = await hash(picked[i].file);
+    const h = picked[i].file.size > MAX_BYTES ? picked[i].path : await hash(picked[i].file);
     if (seen.has(h)) { dup.push(`${d.path} = ${seen.get(h)}`); d.skip = true; } else seen.set(h, d.path);
   }
   await pause(); step(2);
@@ -156,6 +162,8 @@ $('go').addEventListener('click', async () => {
   show('s3');
   $('ask').focus();
 });
+const MAX_BYTES = 30 * 1048576; // 30MB 넘는 파일은 건너뜀
+const withTimeout = (pr, ms, fb) => Promise.race([pr, new Promise(r => setTimeout(() => r(fb), ms))]);
 const pause = (ms = 350) => new Promise(r => setTimeout(r, ms));
 
 function buildOverview({ dup, empty, fail }) {
@@ -183,7 +191,7 @@ function firstLine(t) { const s = t.trim().split('\n').find(x => x.trim()) || ''
 /* ---------- 믿:음 불러오기 ---------- */
 let modelPromise = null, onCpu = false;
 const progressCallback = ({ loaded, total }) => {
-  if ($('s2').classList.contains('on') && total)
+  if ($('s2').classList.contains('on') && total && curStep === 4)
     $('stepNote').textContent = `AX봇이 작업할 폴더를 준비 중입니다 · ${Math.round(loaded / 1048576).toLocaleString()}MB / ${Math.round(total / 1048576).toLocaleString()}MB`;
 };
 async function loadCpu() {
