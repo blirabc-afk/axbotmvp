@@ -18,8 +18,18 @@ let overviewText = '';
 let history = [];  // {q, a}
 let wllama = null, modelReady = false, modelErr = null;
 
-/* ---------- 1. 폴더 끌어다 놓기 ---------- */
+/* ---------- 1. 폴더 끌어다 놓기 · 폴더 선택하기 ---------- */
 const drop = $('drop');
+// 점선 칸 밖에 놓아도 브라우저가 파일을 열어 버리지 않게 막는다
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => { if (!drop.contains(e.target)) e.preventDefault(); });
+$('pickBtn').addEventListener('click', () => $('pickInput').click());
+$('pickInput').addEventListener('change', e => {
+  for (const f of e.target.files) picked.push({ path: f.webkitRelativePath || f.name, file: f });
+  e.target.value = '';
+  $('picked').textContent = `자료 ${picked.length}개를 받았습니다.`;
+  $('go').disabled = picked.length === 0;
+});
 drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', async e => {
