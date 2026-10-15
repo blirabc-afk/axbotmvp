@@ -18,11 +18,9 @@ let overviewText = '';
 let history = [];  // {q, a}
 let wllama = null, modelReady = false, modelErr = null;
 
-/* ---------- 1. 폴더 끌어다 놓기 · 폴더 선택하기 ---------- */
-const drop = $('drop');
-// 점선 칸 밖에 놓아도 브라우저가 파일을 열어 버리지 않게 막는다
+/* ---------- 1. 작업에 사용할 폴더 선택 ---------- */
 window.addEventListener('dragover', e => e.preventDefault());
-window.addEventListener('drop', e => { if (!drop.contains(e.target)) e.preventDefault(); });
+window.addEventListener('drop', e => e.preventDefault());
 $('pickBtn').addEventListener('click', () => $('pickInput').click());
 $('pickInput').addEventListener('change', e => {
   for (const f of e.target.files) picked.push({ path: f.webkitRelativePath || f.name, file: f });
@@ -30,28 +28,6 @@ $('pickInput').addEventListener('change', e => {
   $('picked').textContent = `자료 ${picked.length}개를 받았습니다.`;
   $('go').disabled = picked.length === 0;
 });
-drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
-drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-drop.addEventListener('drop', async e => {
-  e.preventDefault(); drop.classList.remove('over');
-  const entries = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
-  for (const en of entries) await walk(en, '');
-  $('picked').textContent = `자료 ${picked.length}개를 받았습니다.`;
-  $('go').disabled = picked.length === 0;
-});
-async function walk(entry, base) {
-  if (entry.isFile) {
-    const file = await new Promise((ok, no) => entry.file(ok, no));
-    picked.push({ path: base + entry.name, file });
-  } else if (entry.isDirectory) {
-    const rd = entry.createReader();
-    let batch;
-    do {
-      batch = await new Promise((ok, no) => rd.readEntries(ok, no));
-      for (const c of batch) await walk(c, base + entry.name + '/');
-    } while (batch.length);
-  }
-}
 
 /* ---------- 2. 진도: 여섯 조각 ---------- */
 const STEPS = ['자료 읽기', '빈 자료·중복 검사', '내용 나누기', '한눈에 정리', '믿:음 불러오기', '준비 완료'];
