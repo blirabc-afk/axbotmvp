@@ -5,7 +5,7 @@ import { Wllama } from './wllama.js';
 const MODEL = { repo: 'DevQuasar/K-intelligence.Midm-2.0-Mini-Instruct-GGUF',
                 file: 'K-intelligence.Midm-2.0-Mini-Instruct.Q4_K_M.gguf' };
 const N_CTX = 6144;          // 한 번에 다루는 글자 그릇
-const CTX_CHARS = 3600;      // 모델에 넘기는 자료 글자 수 상한
+const CTX_CHARS = 2400;      // 모델에 넘기는 자료 글자 수 상한
 const CHUNK = 600;           // 자료를 나누는 조각 크기
 
 const $ = (id) => document.getElementById(id);
@@ -23,7 +23,7 @@ window.addEventListener('dragover', e => e.preventDefault());
 window.addEventListener('drop', e => e.preventDefault());
 $('pickBtn').addEventListener('click', () => $('pickInput').click());
 $('pickInput').addEventListener('change', e => {
-  for (const f of e.target.files) picked.push({ path: f.webkitRelativePath || f.name, file: f });
+  for (const f of e.target.files) { const path = f.webkitRelativePath || f.name; if (!isSystemFile(path)) picked.push({ path, file: f }); }
   e.target.value = '';
   $('picked').textContent = `자료 ${picked.length}개를 받았습니다.`;
   $('go').disabled = picked.length === 0;
@@ -72,6 +72,9 @@ async function readOne({ path, file }) {
       const r = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
       return { path, kind: '문서', text: r.value };
     }
+    if (e === 'hwp') return { path, kind: '한글', text: await readHwp(await file.arrayBuffer()) };
+    if (e === 'hwpx') return { path, kind: '한글', text: await readZipXml(file, /^Contents\/section(\d+)\.xml$/, 'hp:t', 'hp:p') };
+    if (e === 'pptx') return { path, kind: '발표자료', text: await readZipXml(file, /^ppt\/slides\/slide(\d+)\.xml$/, 'a:t', 'a:p') };
     if (e === 'pdf') {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.min.js';
       const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
@@ -82,8 +85,93 @@ async function readOne({ path, file }) {
       }
       return { path, kind: 'PDF', text: t };
     }
-  } catch (err) { return { path, kind: '읽지 못함', text: '', err: String(err) }; }
-  return { path, kind: '읽지 못함', text: '' };
+  } catch (err) { console.warn('읽기 실패', path, err); return { path, kind: '읽지 못함', text: '', reason: '열리지 않는 파일', err: String(err) }; }
+  return { path, kind: '읽지 못함', text: '', reason: typeName(e) };
+}
+
+// 읽지 못하는 형식은 종류 이름으로 묶어 보여 준다
+function typeName(e) {
+  if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff', 'heic', 'webp', 'svg'].includes(e)) return '그림';
+  if (['mp4', 'avi', 'mov', 'wmv', 'mkv', 'flv', 'm4v'].includes(e)) return '동영상';
+  if (['mp3', 'wav', 'm4a', 'wma', 'aac', 'ogg'].includes(e)) return '소리';
+  if (['zip', '7z', 'rar', 'alz', 'egg', 'tar', 'gz'].includes(e)) return '압축 파일';
+  if (['doc', 'ppt', 'xlsb'].includes(e)) return '옛 형식 오피스 문서';
+  if (['exe', 'msi', 'dll', 'lnk', 'url', 'iso'].includes(e)) return '프로그램·바로가기';
+  return e ? `${e.toUpperCase()} 파일` : '확장자 없는 파일';
+}
+
+// 윈도우·맥이 몰래 만드는 파일은 자료로 세지 않는다
+function isSystemFile(path) {
+  const n = path.split('/').pop().toLowerCase();
+  return n === 'desktop.ini' || n === 'thumbs.db' || n === '.ds_store' || n.startsWith('~$') || n.startsWith('.') || n.endsWith('.tmp');
+}
+
+const unxml = (s) => s.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16))).replace(/&amp;/g, '&');
+
+// hwpx·pptx: 압축 안의 XML에서 글자만 뽑는다
+async function readZipXml(file, re, textTag, paraTag) {
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const names = Object.keys(zip.files).filter(n => re.test(n)).sort((a, b) => +a.match(re)[1] - +b.match(re)[1]);
+  const tokRe = new RegExp(`<${textTag}\\b[^>]*>([\\s\\S]*?)<\\/${textTag}>|<\\/${paraTag}>`, 'g');
+  let out = '';
+  for (const n of names) {
+    const xml = await zip.file(n).async('string');
+    let line = '';
+    for (const m of xml.matchAll(tokRe)) {
+      if (m[1] !== undefined) line += unxml(m[1]); else { if (line.trim()) out += line + '\n'; line = ''; }
+    }
+    if (line.trim()) out += line + '\n';
+    out += '\n';
+  }
+  return out;
+}
+
+// hwp 5.0: 복합 문서 안 BodyText/SectionN 스트림의 문단 글자(꼬리표 67)를 뽑는다
+async function readHwp(buf) {
+  const cfb = XLSX.CFB.read(new Uint8Array(buf), { type: 'array' });
+  const hdr = XLSX.CFB.find(cfb, 'FileHeader');
+  if (!hdr) throw new Error('hwp 아님');
+  const h = hdr.content, props = h[36] | (h[37] << 8);
+  if (props & 2) throw new Error('암호 걸린 hwp');
+  const compressed = props & 1;
+  let out = '';
+  for (let i = 0; ; i++) {
+    const s = XLSX.CFB.find(cfb, '/BodyText/Section' + i);
+    if (!s) break;
+    let data = Uint8Array.from(s.content);
+    if (compressed) data = await inflateRaw(data);
+    const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let p = 0;
+    while (p + 4 <= data.length) {
+      const head = dv.getUint32(p, true); p += 4;
+      const tag = head & 0x3ff; let size = (head >>> 20) & 0xfff;
+      if (size === 0xfff) { size = dv.getUint32(p, true); p += 4; }
+      if (tag === 67) out += hwpParaText(dv, p, size) + '\n';
+      p += size;
+    }
+  }
+  return out;
+}
+// 끝에 남는 군더더기 바이트로 크롬이 오류를 내도, 그때까지 풀린 내용은 쓴다
+async function inflateRaw(bytes) {
+  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+  const parts = []; let n = 0;
+  try { for (;;) { const { done, value } = await reader.read(); if (done) break; parts.push(value); n += value.length; } }
+  catch (e) { if (!n) throw e; }
+  const out = new Uint8Array(n); let o = 0; parts.forEach(v => { out.set(v, o); o += v.length; });
+  return out;
+}
+function hwpParaText(dv, start, size) {
+  let t = '';
+  for (let i = 0; i + 1 < size; i += 2) {
+    const c = dv.getUint16(start + i, true);
+    if (c >= 32) { t += String.fromCharCode(c); continue; }
+    if (c === 9) { t += ' '; i += 14; continue; }
+    if (c === 0 || c === 10 || c === 13 || (c >= 24 && c <= 31)) continue;
+    i += 14; // 나머지 조종 문자는 8글자 자리를 차지한다
+  }
+  return t;
 }
 function cell(v) {
   if (!(v instanceof Date)) return String(v).trim();
@@ -127,16 +215,16 @@ $('go').addEventListener('click', async () => {
   for (let i = 0; i < picked.length; i++) {
     const p = picked[i];
     $('stepNote').textContent = `${i + 1} / ${picked.length} · ${p.path.split('/').pop()}`;
-    if (p.file.size > MAX_BYTES) { docs.push({ path: p.path, kind: '읽지 못함', text: '', big: true }); continue; }
-    docs.push(await withTimeout(readOne(p), 20000, { path: p.path, kind: '읽지 못함', text: '' }));
+    if (p.file.size > MAX_BYTES) { docs.push({ path: p.path, kind: '읽지 못함', text: '', reason: '30MB 넘는 파일' }); continue; }
+    docs.push(await withTimeout(readOne(p), 20000, { path: p.path, kind: '읽지 못함', text: '', reason: '읽는 시간 초과' }));
   }
   step(1);
 
   const seen = new Map(); const dup = [], empty = [], fail = [];
   for (let i = 0; i < picked.length; i++) {
     const d = docs[i];
-    if (d.kind === '읽지 못함') { fail.push(d.path); continue; }
-    if (!d.text.trim()) { empty.push(d.path); d.skip = true; continue; }
+    if (d.kind === '읽지 못함') { fail.push(d.reason || '기타'); continue; }
+    if (!d.text.trim()) { empty.push(d.kind === 'PDF' ? '글자 없는 PDF·스캔 문서' : '내용이 빈 파일'); d.skip = true; continue; }
     const h = picked[i].file.size > MAX_BYTES ? picked[i].path : await hash(picked[i].file);
     if (seen.has(h)) { dup.push(`${d.path} = ${seen.get(h)}`); d.skip = true; } else seen.set(h, d.path);
   }
@@ -184,8 +272,9 @@ function buildOverview({ dup, empty, fail }) {
     Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join(' · ') + `</div>` +
     `<ul>${lines.slice(0, 30).map(l => `<li>${esc(l)}</li>`).join('')}${lines.length > 30 ? `<li>외 ${lines.length - 30}개</li>` : ''}</ul>` +
     (dup.length ? `<div style="margin-top:8px">같은 자료 ${dup.length}개는 한 번만 썼습니다.</div>` : '') +
-    (empty.length + fail.length ? `<div style="margin-top:4px;color:#7B1F2A">읽지 못한 자료 ${empty.length + fail.length}개: ${esc([...fail, ...empty].slice(0, 5).join(', '))}${empty.length + fail.length > 5 ? ' 등' : ''}</div>` : '');
+    (empty.length + fail.length ? `<div style="margin-top:4px">읽지 못한 자료 ${empty.length + fail.length}개: ${esc(countBy([...fail, ...empty]))}</div>` : '');
 }
+function countBy(arr) { const c = {}; arr.forEach(x => c[x] = (c[x] || 0) + 1); return Object.entries(c).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n.toLocaleString()}개`).join(' · '); }
 function firstLine(t) { const s = t.trim().split('\n').find(x => x.trim()) || ''; return s.trim().slice(0, 60); }
 
 /* ---------- 믿:음 불러오기 ---------- */
@@ -199,13 +288,16 @@ async function loadCpu() {
   wllama = new Wllama({ default: './wllama.wasm' });
   await wllama.loadModelFromHF(MODEL, { n_ctx: N_CTX, n_gpu_layers: 0, progressCallback });
   onCpu = true;
+  try { localStorage.setItem('axbot_cpu', '1'); } catch {}
 }
 function loadModel() {
   if (modelPromise) return modelPromise;
   wllama = new Wllama({ default: './wllama.wasm' }, { parallelDownloads: 3 });
   modelPromise = (async () => {
     try {
-      await wllama.loadModelFromHF(MODEL, { n_ctx: N_CTX, progressCallback });
+      let cpuFirst = false; try { cpuFirst = localStorage.getItem('axbot_cpu') === '1'; } catch {}
+      if (cpuFirst) { onCpu = true; await wllama.loadModelFromHF(MODEL, { n_ctx: N_CTX, n_gpu_layers: 0, progressCallback }); }
+      else await wllama.loadModelFromHF(MODEL, { n_ctx: N_CTX, progressCallback });
     } catch (e1) {
       console.warn('그래픽 장치로 불러오기 실패, CPU로 다시 불러온다', e1);
       await loadCpu();
@@ -252,7 +344,10 @@ async function ask() {
   const q = $('ask').value.trim();
   if (!q) return;
   if (!modelReady) { $('modelState').textContent = modelErr ? '내장된 AI를 불러오지 못했습니다' : '내장된 AI를 불러오는 중입니다'; return; }
-  $('send').disabled = true; $('modelState').textContent = '작성 중';
+  $('send').disabled = true;
+  let label = '작성 중'; const t0 = Date.now();
+  const tick = setInterval(() => { $('modelState').textContent = `${label} · ${Math.round((Date.now() - t0) / 1000)}초`; }, 1000);
+  $('modelState').textContent = label;
   const turn = document.createElement('div'); turn.className = 'turn';
   turn.innerHTML = `<div class="q"></div><div class="a"></div>`;
   turn.querySelector('.q').textContent = q;
@@ -261,7 +356,7 @@ async function ask() {
 
   const build = (k) => [
     { role: 'system', content: SYSTEM },
-    { role: 'user', content: `[계산값]\n${overviewText.slice(0, Math.round(1800 * k))}\n\n[자료]\n${pickContext(q, CTX_CHARS * k)}` },
+    { role: 'user', content: `[계산값]\n${overviewText.slice(0, Math.round(1000 * k))}\n\n[자료]\n${pickContext(q, CTX_CHARS * k)}` },
     { role: 'assistant', content: '자료를 읽었다. 요청을 말해 주면 자료 안에서만 답한다.' },
   ];
   const withTurn = (k) => {
@@ -279,17 +374,20 @@ async function ask() {
     if (!a.trim()) throw new Error('빈 답변');
   };
   // 1차: 그대로 → 2차: CPU로 바꿔서 → 3차: 자료를 절반으로 줄여서
-  const tries = [async () => run(1), async () => { if (!onCpu) { $('modelState').textContent = '다시 작성 중'; await loadCpu(); } return run(1); }, async () => run(0.5)];
+  const tries = [async () => run(1), async () => { if (!onCpu) { label = 'CPU로 바꿔 다시 작성 중'; await loadCpu(); } return run(1); }, async () => run(0.5)];
   let ok = false;
+  const errs = [];
   for (const t of tries) {
-    try { await t(); ok = true; break; } catch (e) { lastErr = e; console.error(e); }
+    try { await t(); ok = true; break; } catch (e) { lastErr = e; console.error(e); errs.push(e?.message || String(e)); }
   }
   if (!ok) {
     a = '결과를 만들지 못했습니다.';
-    aEl.textContent = a + '\n원인: ' + (lastErr?.message || String(lastErr));
+    aEl.textContent = a + '\n원인: ' + errs.join(' / ');
   }
   history.push({ q, a });
-  $('ask').value = ''; $('send').disabled = false; $('modelState').textContent = '';
+  clearInterval(tick);
+  if (ok && errs.length) console.warn('앞선 실패 원인:', errs);
+  $('ask').value = ''; $('send').disabled = false; $('modelState').textContent = ok && errs.length ? `처음 실패 원인: ${errs[0]}` : '';
   $('send').textContent = '이어서 묻기';
 }
 
