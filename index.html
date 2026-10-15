@@ -24,7 +24,7 @@
   .main-btn { display:block; margin:24px auto 0; padding:14px 40px; font-size:20px; font-weight:700; color:#fff; background:var(--navy); border:0; }
   .main-btn:disabled { background:#fff; color:var(--navy); border:2px solid var(--navy); cursor:default; }
   .line-btn { padding:8px 16px; color:var(--navy); background:#fff; border:1px solid var(--navy); }
-  #picked { margin-top:16px; }
+  #picked { margin-top:16px; text-align:center; font-weight:700; color:var(--navy); }
   .pie-wrap { text-align:center; margin-top:24px; }
   #stepName { font-size:22px; font-weight:700; color:var(--navy); margin-top:12px; }
   #stepNote { margin-top:4px; }
@@ -52,6 +52,10 @@
     <div id="drop">
       <b>폴더를 여기에 끌어다 놓으세요</b><br>
       여러 폴더는 Ctrl을 누른 채 함께 고르세요
+    </div>
+    <div style="text-align:center;margin-top:16px">
+      <button id="pickBtn" class="line-btn">폴더 선택하기</button>
+      <input id="pickInput" type="file" webkitdirectory multiple hidden>
     </div>
     <div id="picked"></div>
     <button id="go" class="main-btn" disabled>작업 시키기</button>
