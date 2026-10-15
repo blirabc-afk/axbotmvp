@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AX봇</title>
+<script src="coi-serviceworker.js"></script>
+<script src="mammoth.browser.min.js"></script>
+<script src="xlsx.full.min.js"></script>
+<script src="pdf.min.js"></script>
+<style>
+  :root { --ink:#000; --navy:#1A237E; --wine:#7B1F2A; --line:#1A237E; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:#fff; color:var(--ink); font-family:"Noto Sans KR","맑은 고딕",sans-serif; font-size:18px; line-height:1.6; }
+  main { max-width:880px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:28px; color:var(--navy); margin:0 0 4px; }
+  .sub { margin:0 0 24px; }
+  .screen { display:none; }
+  .screen.on { display:block; }
+  #drop { border:2px dashed var(--navy); border-radius:12px; padding:48px 16px; text-align:center; }
+  #drop.over { border-style:solid; }
+  #drop b { color:var(--navy); font-size:22px; }
+  button { font:inherit; cursor:pointer; border-radius:8px; }
+  .main-btn { display:block; margin:24px auto 0; padding:14px 40px; font-size:20px; font-weight:700; color:#fff; background:var(--navy); border:0; }
+  .main-btn:disabled { background:#fff; color:var(--navy); border:2px solid var(--navy); cursor:default; }
+  .line-btn { padding:8px 16px; color:var(--navy); background:#fff; border:1px solid var(--navy); }
+  #picked { margin-top:16px; }
+  .pie-wrap { text-align:center; margin-top:24px; }
+  #stepName { font-size:22px; font-weight:700; color:var(--navy); margin-top:12px; }
+  #stepNote { margin-top:4px; }
+  .box { border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:20px; }
+  .box h2 { font-size:20px; color:var(--navy); margin:0 0 8px; }
+  #overview ul { margin:8px 0 0; padding-left:22px; }
+  #ask::placeholder { color:var(--navy); opacity:1; }
+  #ask { width:100%; min-height:90px; font:inherit; padding:12px; border:1px solid var(--navy); border-radius:8px; resize:vertical; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+  .chip { padding:6px 12px; color:var(--navy); background:#fff; border:1px solid var(--navy); border-radius:20px; font-size:16px; }
+  .row { display:flex; gap:10px; justify-content:flex-end; margin-top:10px; flex-wrap:wrap; }
+  .turn { margin-top:16px; }
+  .q { font-weight:700; color:var(--navy); }
+  .a { white-space:pre-wrap; margin-top:6px; }
+  #modelState { font-weight:700; color:var(--wine); }
+  .bottom { text-align:center; margin-top:28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AX봇</h1>
+  <p class="sub">폴더를 넣으면 내용을 정리하고, 원하는 결과를 만들어 드립니다.</p>
+
+  <section id="s1" class="screen on">
+    <div id="drop">
+      <b>폴더를 여기에 끌어다 놓으세요</b><br>
+      여러 폴더는 Ctrl을 누른 채 함께 고르세요
+    </div>
+    <div id="picked"></div>
+    <button id="go" class="main-btn" disabled>작업 시키기</button>
+  </section>
+
+  <section id="s2" class="screen">
+    <div class="pie-wrap">
+      <svg id="pie" width="200" height="200" viewBox="-100 -100 200 200"></svg>
+      <div id="stepName"></div>
+      <div id="stepNote"></div>
+    </div>
+  </section>
+
+  <section id="s3" class="screen">
+    <div class="box" id="overview"></div>
+    <div class="box">
+      <h2>어떤 결과를 보고 싶으신가요?</h2>
+      <textarea id="ask" placeholder="보고 싶은 내용을 적어 주세요"></textarea>
+      <div class="chips">
+        <button class="chip">폴더 안 내용을 정리해서 보고서로 만들어 줘</button>
+        <button class="chip">가장 중요한 내용 5가지만 알려 줘</button>
+        <button class="chip">날짜별로 무슨 일이 있었는지 정리해 줘</button>
+      </div>
+      <div class="row">
+        <span id="modelState"></span>
+        <button id="send" class="main-btn" style="margin:0">결과 만들기</button>
+      </div>
+      <div id="talk"></div>
+    </div>
+    <div class="bottom">
+      <button id="save" class="line-btn">결과 저장</button>
+      <button id="home" class="line-btn">처음으로</button>
+    </div>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
